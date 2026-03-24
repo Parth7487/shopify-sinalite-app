@@ -1,0 +1,18 @@
+{
+  "name": "shopify-print-middleware",
+  "version": "1.0.0",
+  "description": "Middleware between Shopify webhooks and a 3rd-party print API",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
