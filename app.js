@@ -25,7 +25,7 @@ async function getSinaliteToken() {
 
   if (!clientId || !clientSecret) throw new Error('Missing Sinalite credentials');
 
-  const response = await fetch('https://liveapi.sinalite.com/auth/token', {
+  const response = await fetch('https://api.sinaliteuppy.com/auth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -55,7 +55,7 @@ app.get('/api/product/:id', async (req, res) => {
     const token = await getSinaliteToken();
     const productId = req.params.id;
 
-    const response = await fetch(`https://liveapi.sinalite.com/product/${productId}/${SINALITE_STORE_CODE}`, {
+    const response = await fetch(`https://api.sinaliteuppy.com/product/${productId}/${SINALITE_STORE_CODE}`, {
         headers: { 'Authorization': `Bearer ${token}` }
     });
 
@@ -77,7 +77,7 @@ app.post('/api/price/:id', express.json(), async (req, res) => {
     const productId = req.params.id;
     const selectedOptions = req.body;  // Sent instantly when customer changes a dropdown on Shopify
 
-    const response = await fetch(`https://liveapi.sinalite.com/price/${productId}/${SINALITE_STORE_CODE}`, {
+    const response = await fetch(`https://api.sinaliteuppy.com/price/${productId}/${SINALITE_STORE_CODE}`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${token}`,
@@ -101,6 +101,91 @@ app.post('/api/price/:id', express.json(), async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// 3. Create a Custom Checkout (Draft Order Teleport!)
+app.post('/api/checkout/:id', express.json(), async (req, res) => {
+  try {
+    // 1. Get exact price from Sinalite
+    const sinaliteToken = await getSinaliteToken();
+    const productId = req.params.id;
+    
+    // The payload sent from Shopify Script contains the IDs and the visual Labels
+    const selectedOptions = { productOptions: req.body.productOptions }; 
+
+    const priceResponse = await fetch(`https://api.sinaliteuppy.com/price/${productId}/${SINALITE_STORE_CODE}`, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${sinaliteToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(selectedOptions)
+    });
+
+    if (!priceResponse.ok) throw new Error(`[Sinalite] Price fetch failed: ${priceResponse.status}`);
+    const apiPriceData = await priceResponse.json();
+    
+    if (!apiPriceData || !apiPriceData.price) throw new Error('Could not calculate price.');
+    const retailPrice = (parseFloat(apiPriceData.price) * RETAIL_MARKUP_MULTIPLIER).toFixed(2);
+
+    // 2. Authenticate with Shopify Dev Dashboard magically
+    const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
+    const shopifyClientId = process.env.SHOPIFY_CLIENT_ID;
+    const shopifyClientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+
+    if (!shopifyDomain || !shopifyClientId || !shopifyClientSecret) {
+       throw new Error('Missing Shopify Dev Dashboard Credentials in Render Environment Variables');
+    }
+
+    const shopAuthReq = await fetch(`https://${shopifyDomain}/admin/oauth/access_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            client_id: shopifyClientId,
+            client_secret: shopifyClientSecret,
+            grant_type: "client_credentials"
+        })
+    });
+
+    if (!shopAuthReq.ok) throw new Error(`[Shopify Auth] Failed: ${await shopAuthReq.text()}`);
+    const shopAuthData = await shopAuthReq.json();
+    const shopifyToken = shopAuthData.access_token;
+
+    // 3. Create Draft Order in Shopify natively!
+    const draftOrderPayload = {
+      draft_order: {
+        line_items: [
+          {
+            title: `Custom Print Job (ID: ${productId})`,
+            price: retailPrice,
+            quantity: 1,
+            properties: req.body.optionNames || [] // Appends the visual size/coating choices to the cart!
+          }
+        ],
+        taxes_included: false
+      }
+    };
+
+    const draftRes = await fetch(`https://${shopifyDomain}/admin/api/2024-01/draft_orders.json`, {
+      method: 'POST',
+      headers: {
+         'Content-Type': 'application/json',
+         'X-Shopify-Access-Token': shopifyToken
+      },
+      body: JSON.stringify(draftOrderPayload)
+    });
+
+    if (!draftRes.ok) throw new Error(`[Shopify Draft] Failed: ${await draftRes.text()}`);
+    const draftData = await draftRes.json();
+
+    // 4. Return the magic checkout URL!
+    res.json({ checkoutUrl: draftData.draft_order.invoice_url });
+
+  } catch (err) {
+    console.error('[Error] creating checkout:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // ─── Webhook Order Receiver (The Mailman) ────────────────────────────────────
 
@@ -166,7 +251,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
       items,
     };
 
-    const response = await fetch('https://liveapi.sinalite.com/order/new', {
+    const response = await fetch('https://api.sinaliteuppy.com/order/new', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
