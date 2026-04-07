@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors()); // Critical: Allows your Shopify Storefront to request data from this server
 
 // Your personal store profit multiplier (e.g. 2.5 means Sinalite's $10 becomes $25 on your site)
-const RETAIL_MARKUP_MULTIPLIER = 2.5; 
+const RETAIL_MARKUP_MULTIPLIER = 2.25; 
 const SINALITE_STORE_CODE = 9; // 9 = USA, 6 = Canada
 
 // ─── Token Manager (Security) ───────────────────────────────────────────────
@@ -211,20 +211,41 @@ function verifyShopifyWebhook(req, res, next) {
 
 async function sendOrderToSinalite(orderData, accessToken) {
   try {
-    const lineItem = orderData.line_items[0];
+    const lineItems = orderData.line_items;
     const shippingAddress = orderData.shipping_address;
 
-    if (!lineItem) return console.error('[Sinalite] No line items');
+    if (!lineItems || lineItems.length === 0) return console.error('[Sinalite] No line items');
     if (!shippingAddress) return console.error('[Sinalite] No shipping address');
 
+    // ── Merge ALL properties from ALL line items into one map ──────────────────
+    // Why: Optis app splits the order into two line items:
+    //   F1 (Pricing Unit) → has size, material, coating, etc.
+    //   F2 (Base Product) → has the SKU, file upload URL, and add-on options
     const propertiesMap = {};
-    if (Array.isArray(lineItem.properties)) {
-      for (const prop of lineItem.properties) propertiesMap[prop.name] = prop.value;
+    let sinaliteProductId = null;
+    let totalQuantity = 1;
+
+    for (const item of lineItems) {
+      // Grab the Sinalite Base Product SKU from whichever line item has one
+      if (item.sku && !sinaliteProductId) {
+        sinaliteProductId = item.sku;
+        totalQuantity = item.quantity;
+      }
+      // Merge all properties
+      if (Array.isArray(item.properties)) {
+        for (const prop of item.properties) propertiesMap[prop.name] = prop.value;
+      }
     }
 
-    const fileUrl = propertiesMap['File'];
-    if (!fileUrl) return console.error('[Sinalite] No "File" uploaded');
+    if (!sinaliteProductId) return console.error('[Sinalite] No SKU found on any line item — cannot identify Sinalite product');
 
+    // ── Find file URL across all known property name variants ─────────────────
+    const fileUrl = propertiesMap['File'] 
+                 || propertiesMap['file upload 1'] 
+                 || propertiesMap['file_upload'];
+    if (!fileUrl) return console.error('[Sinalite] No "File" uploaded — order blocked to prevent blank print');
+
+    // ── Build shipping info ───────────────────────────────────────────────────
     const shippingInfo = {
       ShipFName: shippingAddress.first_name,
       ShipLName: shippingAddress.last_name,
@@ -235,12 +256,18 @@ async function sendOrderToSinalite(orderData, accessToken) {
       ShipCountry: shippingAddress.country_code,
     };
 
+    // ── Build options: remove file URL keys so they don't become print options ─
     const options = { ...propertiesMap };
     delete options['File'];
+    delete options['file upload 1'];
+    delete options['file_upload'];
+    // Also strip Optis add-on labels (not real print options for Sinalite)
+    delete options['Get email proof(+$5)'];
+    delete options['Need Design Services (+$59.99)'];
 
     const items = [{
-      productId: lineItem.sku, // Mapped to Sinalite's Base Product ID!
-      quantity: lineItem.quantity,
+      productId: sinaliteProductId, // Sinalite Base Product ID (e.g. "30" for Business Cards 18pt)
+      quantity: totalQuantity,
       options,
       files: [{ type: 'front', url: fileUrl }],
     }];
@@ -250,6 +277,8 @@ async function sendOrderToSinalite(orderData, accessToken) {
       shippingInfo,
       items,
     };
+
+    console.log(`[Sinalite] Submitting order #${orderData.order_number} — Product: ${sinaliteProductId}, File: ${fileUrl}`);
 
     const response = await fetch('https://api.sinaliteuppy.com/order/new', {
       method: 'POST',
@@ -263,7 +292,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
     const responseData = await response.json();
     if (!response.ok) return console.error(`[Sinalite] Order failed:`, responseData);
     
-    console.log(`✅ Order #${orderData.order_number} submitted! ID: ${responseData.orderId ?? 'N/A'}`);
+    console.log(`✅ Order #${orderData.order_number} submitted! Sinalite ID: ${responseData.orderId ?? 'N/A'}`);
   } catch (err) {
     console.error(`Unexpected error submitting order:`, err.message);
   }
