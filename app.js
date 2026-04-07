@@ -378,37 +378,49 @@ app.get('/api/rescue-pds1003', async (req, res) => {
   try {
     const token = await getSinaliteToken();
 
-    // ── STEP 1: Fetch product options to discover correct Sinalite option IDs ──
-    console.log('[Rescue PDS-1003] Fetching product options for product 30, store 9 (USA)...');
-    const productRes = await fetch('https://api.sinaliteuppy.com/product/30/9', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const productRaw = await productRes.text();
-    let productData;
-    try { productData = JSON.parse(productRaw); } catch { productData = productRaw; }
-    console.log('[Rescue PDS-1003] Product options schema:', JSON.stringify(productData, null, 2));
-
-    // Return the options schema to the browser so we can see what IDs to use
-    return res.json({
-      info: 'DISCOVERY MODE — Shows Sinalite option IDs for product 30. Use these to build the real order.',
-      productEndpoint: 'GET /product/30/9',
-      productData,
-    });
-
-    /* ── STEP 2: Submit order (uncomment after mapping option IDs) ───────────── 
+    // ── Submit order with correct Sinalite numeric option IDs (discovered via GET /product/30/9) ──
     const payload = {
       referenceId: '7929734266942-R3',
-      shippingInfo: { ... },
-      billingInfo: { ... },
+      shippingInfo: {
+        ShipFName: 'Ayaan',
+        ShipLName: 'Lakhani',
+        ShipAddr: '405 Darlene Trl',
+        ShipCity: 'Euless',
+        ShipState: 'TX',
+        ShipZip: '76039',
+        ShipCountry: 'US',
+        ShipPhone: '0000000000', // Required field — actual not available
+        ShipEmail: 'pixilabdesignstudio@gmail.com',
+        ShipMethod: 'UPS Ground',
+      },
+      billingInfo: {
+        BillFName: 'Ayaan',
+        BillLName: 'Lakhani',
+        BillAddr: '405 Darlene Trl',
+        BillCity: 'Euless',
+        BillState: 'TX',
+        BillZip: '76039',
+        BillCountry: 'US',
+        BillPhone: '0000000000',
+        BillEmail: 'pixilabdesignstudio@gmail.com',
+      },
       items: [{
-        productId: 30,
+        productId: 30, // integer — Business Cards 18pt Matte Lam + SPOT UV
         options: {
-          // FILL IN CORRECT NUMERIC IDS FROM productData ABOVE
+          // All values are numeric Sinalite option IDs (discovered from GET /product/30/9)
+          'size':       '4',   // 3.5 x 2
+          'qty':        '12',  // 500 pieces
+          'Stock':      '551', // 16PT Printed 2 Sides (4/4)
+          'Turnaround': '18',  // 4 - 5 Business Days
+          'Coating':    '679', // Soft Touch Lamination 2 Sided
+          'Spot UV':    '556', // Two sided
         },
-        files: [{ type: 'front', url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf' }],
+        files: [{
+          type: 'front',
+          url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf'
+        }],
       }],
     };
-    ─────────────────────────────────────────────────────────────────────────── */
 
     console.log('[Rescue PDS-1003] Submitting to Sinalite...');
     console.log('[Rescue PDS-1003] Payload:', JSON.stringify(payload, null, 2));
