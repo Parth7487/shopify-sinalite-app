@@ -355,5 +355,76 @@ app.get('/api/manual-submit/:orderId', async (req, res) => {
   }
 });
 
+// ─── ONE-TIME RESCUE: Order #PDS-1003 (Ayaan Lakhani) ────────────────────────
+// All data hardcoded from Shopify order screenshots — no admin token needed.
+// Call via: GET https://shopify-sinalite-app.onrender.com/api/rescue-pds1003?secret=pixilab2026
+app.get('/api/rescue-pds1003', async (req, res) => {
+  if (req.query.secret !== 'pixilab2026') return res.status(403).json({ error: 'Forbidden' });
+
+  try {
+    const token = await getSinaliteToken();
+
+    const payload = {
+      referenceId: '7929734266942', // Shopify Order ID for #PDS-1003
+      shippingInfo: {
+        ShipFName: 'Ayaan',
+        ShipLName: 'Lakhani',
+        ShipAddr: '405 Darlene Trl',
+        ShipCity: 'Euless',
+        ShipState: 'TX',
+        ShipZip: '76039',
+        ShipCountry: 'US',
+      },
+      items: [{
+        productId: '30', // Sinalite Base Product ID (Business Cards 18pt Matte Lam + SPOT UV)
+        quantity: 500,
+        options: {
+          'Card Stock (Material)': '16PT Printed 2 Sides (4/4)',
+          'Size': '3.5x2',
+          'Coating (Lamination/Finish)': 'Soft Touch Lamination 2 Sided',
+          'Round Corners': 'No',
+          'Spot UV': 'Two sided',
+          'Turnaround Period (Production time)': '4 - 5 Business Days',
+        },
+        files: [{
+          type: 'front',
+          url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf'
+        }],
+      }],
+    };
+
+    console.log('[Rescue PDS-1003] Submitting to Sinalite...');
+    console.log('[Rescue PDS-1003] Payload:', JSON.stringify(payload, null, 2));
+
+    const response = await fetch('https://api.sinaliteuppy.com/order/new', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const responseData = await response.json();
+
+    if (!response.ok) {
+      console.error('[Rescue PDS-1003] Sinalite rejected:', responseData);
+      return res.status(500).json({ error: 'Sinalite rejected order', details: responseData });
+    }
+
+    console.log(`✅ [Rescue PDS-1003] SUCCESS! Sinalite Order ID: ${responseData.orderId ?? 'N/A'}`);
+    res.json({
+      success: true,
+      message: 'Order #PDS-1003 successfully submitted to Sinalite!',
+      sinaliteOrderId: responseData.orderId,
+      fullResponse: responseData,
+    });
+
+  } catch (err) {
+    console.error('[Rescue PDS-1003] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`🚀 Ultimate Shopify-Sinalite Sync Engine running on port ${PORT}`));
