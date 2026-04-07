@@ -256,6 +256,17 @@ async function sendOrderToSinalite(orderData, accessToken) {
       ShipCountry: shippingAddress.country_code,
     };
 
+    // Use shipping address as billing (Shopify doesn't always expose billing separately)
+    const billingInfo = {
+      BillFName: shippingAddress.first_name,
+      BillLName: shippingAddress.last_name,
+      BillAddr: shippingAddress.address1,
+      BillCity: shippingAddress.city,
+      BillState: shippingAddress.province_code,
+      BillZip: shippingAddress.zip,
+      BillCountry: shippingAddress.country_code,
+    };
+
     // ── Build options: remove file URL keys so they don't become print options ─
     const options = { ...propertiesMap };
     delete options['File'];
@@ -275,6 +286,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
     const payload = {
       referenceId: String(orderData.id),
       shippingInfo,
+      billingInfo,
       items,
     };
 
@@ -376,6 +388,15 @@ app.get('/api/rescue-pds1003', async (req, res) => {
         ShipState: 'TX',
         ShipZip: '76039',
         ShipCountry: 'US',
+      },
+      billingInfo: {
+        BillFName: 'Ayaan',
+        BillLName: 'Lakhani',
+        BillAddr: '405 Darlene Trl',
+        BillCity: 'Euless',
+        BillState: 'TX',
+        BillZip: '76039',
+        BillCountry: 'US',
       },
       items: [{
         productId: '30', // Sinalite Base Product ID (Business Cards 18pt Matte Lam + SPOT UV)
