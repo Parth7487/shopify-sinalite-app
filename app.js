@@ -367,7 +367,7 @@ app.get('/api/rescue-pds1003', async (req, res) => {
     const token = await getSinaliteToken();
 
     const payload = {
-      referenceId: '7929734266942', // Shopify Order ID for #PDS-1003
+      referenceId: '7929734266942-R1', // Unique suffix added to avoid duplicate rejection
       shippingInfo: {
         ShipFName: 'Ayaan',
         ShipLName: 'Lakhani',
