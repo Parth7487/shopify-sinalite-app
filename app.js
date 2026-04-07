@@ -318,7 +318,9 @@ app.get('/api/manual-submit/:orderId', async (req, res) => {
   try {
     // 1. Fetch the order from Shopify Admin API
     const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
-    const shopifyToken = process.env.SHOPIFY_CLIENT_SECRET;
+    // SHOPIFY_ADMIN_TOKEN = the shpat_... token from Shopify Admin > Apps > Develop apps > API credentials
+    const shopifyToken = process.env.SHOPIFY_ADMIN_TOKEN;
+    if (!shopifyToken) return res.status(500).json({ error: 'Missing SHOPIFY_ADMIN_TOKEN env var — see INTEGRATION_MASTER_GUIDE.md' });
 
     const orderRes = await fetch(`https://${shopifyDomain}/admin/api/2024-01/orders/${orderId}.json`, {
       headers: { 'X-Shopify-Access-Token': shopifyToken }
