@@ -378,43 +378,37 @@ app.get('/api/rescue-pds1003', async (req, res) => {
   try {
     const token = await getSinaliteToken();
 
+    // ── STEP 1: Fetch product options to discover correct Sinalite option IDs ──
+    console.log('[Rescue PDS-1003] Fetching product options for product 30, store 9 (USA)...');
+    const productRes = await fetch('https://api.sinaliteuppy.com/product/30/9', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const productRaw = await productRes.text();
+    let productData;
+    try { productData = JSON.parse(productRaw); } catch { productData = productRaw; }
+    console.log('[Rescue PDS-1003] Product options schema:', JSON.stringify(productData, null, 2));
+
+    // Return the options schema to the browser so we can see what IDs to use
+    return res.json({
+      info: 'DISCOVERY MODE — Shows Sinalite option IDs for product 30. Use these to build the real order.',
+      productEndpoint: 'GET /product/30/9',
+      productData,
+    });
+
+    /* ── STEP 2: Submit order (uncomment after mapping option IDs) ───────────── 
     const payload = {
-      referenceId: '7929734266942-R2', // Bumped to -R2 since -R1 was already attempted
-      shippingInfo: {
-        ShipFName: 'Ayaan',
-        ShipLName: 'Lakhani',
-        ShipAddr: '405 Darlene Trl',
-        ShipCity: 'Euless',
-        ShipState: 'TX',
-        ShipZip: '76039',
-        ShipCountry: 'US',
-      },
-      billingInfo: {
-        BillFName: 'Ayaan',
-        BillLName: 'Lakhani',
-        BillAddr: '405 Darlene Trl',
-        BillCity: 'Euless',
-        BillState: 'TX',
-        BillZip: '76039',
-        BillCountry: 'US',
-      },
+      referenceId: '7929734266942-R3',
+      shippingInfo: { ... },
+      billingInfo: { ... },
       items: [{
-        productId: '30', // Sinalite Base Product ID (Business Cards 18pt Matte Lam + SPOT UV)
-        quantity: 500,
+        productId: 30,
         options: {
-          'Card Stock (Material)': '16PT Printed 2 Sides (4/4)',
-          'Size': '3.5x2',
-          'Coating (Lamination/Finish)': 'Soft Touch Lamination 2 Sided',
-          'Round Corners': 'No',
-          'Spot UV': 'Two sided',
-          'Turnaround Period (Production time)': '4 - 5 Business Days',
+          // FILL IN CORRECT NUMERIC IDS FROM productData ABOVE
         },
-        files: [{
-          type: 'front',
-          url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf'
-        }],
+        files: [{ type: 'front', url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf' }],
       }],
     };
+    ─────────────────────────────────────────────────────────────────────────── */
 
     console.log('[Rescue PDS-1003] Submitting to Sinalite...');
     console.log('[Rescue PDS-1003] Payload:', JSON.stringify(payload, null, 2));
