@@ -245,7 +245,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
                  || propertiesMap['file_upload'];
     if (!fileUrl) return console.error('[Sinalite] No "File" uploaded — order blocked to prevent blank print');
 
-    // ── Build shipping info ───────────────────────────────────────────────────
+    // ── Build shipping/billing info ───────────────────────────────────────────
     const shippingInfo = {
       ShipFName: shippingAddress.first_name,
       ShipLName: shippingAddress.last_name,
@@ -254,9 +254,11 @@ async function sendOrderToSinalite(orderData, accessToken) {
       ShipState: shippingAddress.province_code,
       ShipZip: shippingAddress.zip,
       ShipCountry: shippingAddress.country_code,
+      ShipEmail: orderData.email || '',
+      ShipPhone: shippingAddress.phone || '0000000000',
+      ShipMethod: 'UPS Ground',
     };
 
-    // Use shipping address as billing (Shopify doesn't always expose billing separately)
     const billingInfo = {
       BillFName: shippingAddress.first_name,
       BillLName: shippingAddress.last_name,
@@ -265,21 +267,49 @@ async function sendOrderToSinalite(orderData, accessToken) {
       BillState: shippingAddress.province_code,
       BillZip: shippingAddress.zip,
       BillCountry: shippingAddress.country_code,
+      BillEmail: orderData.email || '',
+      BillPhone: shippingAddress.phone || '0000000000',
     };
 
-    // ── Build options: remove file URL keys so they don't become print options ─
-    const options = { ...propertiesMap };
-    delete options['File'];
-    delete options['file upload 1'];
-    delete options['file_upload'];
-    // Also strip Optis add-on labels (not real print options for Sinalite)
-    delete options['Get email proof(+$5)'];
-    delete options['Need Design Services (+$59.99)'];
+    // ── Fetch Sinalite product option list to map names → numeric IDs ─────────
+    // Sinalite requires numeric option IDs, not human-readable labels.
+    const productRes = await fetch(`https://api.sinaliteuppy.com/product/${sinaliteProductId}/${SINALITE_STORE_CODE}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    const productRaw = await productRes.text();
+    let sinaliteOptions = [];
+    try {
+      const parsed = JSON.parse(productRaw);
+      sinaliteOptions = Array.isArray(parsed[0]) ? parsed[0] : [];
+    } catch { /* leave empty */ }
+
+    // ── Map each Shopify property value to Sinalite option ID ─────────────────
+    // Cleanup: remove non-print properties before mapping
+    const cleanProps = { ...propertiesMap };
+    ['File', 'file upload 1', 'file_upload', 'Get email proof(+$5)', 'Need Design Services (+$59.99)', '__bss_po_addons'].forEach(k => delete cleanProps[k]);
+
+    const mappedOptions = {};
+    for (const sOpt of sinaliteOptions) {
+      const optNameLower = sOpt.name.toLowerCase().trim();
+      // Special case: qty — match against the actual line item quantity number
+      if (sOpt.group === 'qty' && sOpt.name === String(totalQuantity)) {
+        mappedOptions['qty'] = String(sOpt.id);
+        continue;
+      }
+      // General case: match Sinalite option name against any Shopify property value
+      for (const propValue of Object.values(cleanProps)) {
+        if (optNameLower === propValue.toLowerCase().trim()) {
+          mappedOptions[sOpt.group] = String(sOpt.id);
+          break;
+        }
+      }
+    }
+
+    console.log(`[Sinalite] Mapped options for product ${sinaliteProductId}:`, mappedOptions);
 
     const items = [{
-      productId: sinaliteProductId, // Sinalite Base Product ID (e.g. "30" for Business Cards 18pt)
-      quantity: totalQuantity,
-      options,
+      productId: Number(sinaliteProductId),
+      options: mappedOptions,
       files: [{ type: 'front', url: fileUrl }],
     }];
 
