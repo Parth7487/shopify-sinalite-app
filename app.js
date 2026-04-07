@@ -303,5 +303,55 @@ app.post('/api/webhooks/orders/paid', express.raw({ type: 'application/json' }),
   getSinaliteToken().then(token => sendOrderToSinalite(req.orderData, token)).catch(err => console.error(err));
 });
 
+// ─── Manual Order Rescue Endpoint (Temporary) ─────────────────────────────────
+// Use this to re-submit past orders that the webhook missed.
+// Call via: GET https://shopify-sinalite-app.onrender.com/api/manual-submit/:orderId?secret=pixilab2026
+app.get('/api/manual-submit/:orderId', async (req, res) => {
+  // Basic secret gate so this can't be abused
+  if (req.query.secret !== 'pixilab2026') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const orderId = req.params.orderId;
+  console.log(`[Manual] Triggered for Shopify Order ID: ${orderId}`);
+  
+  try {
+    // 1. Fetch the order from Shopify Admin API
+    const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
+    const shopifyToken = process.env.SHOPIFY_CLIENT_SECRET;
+
+    const orderRes = await fetch(`https://${shopifyDomain}/admin/api/2024-01/orders/${orderId}.json`, {
+      headers: { 'X-Shopify-Access-Token': shopifyToken }
+    });
+
+    if (!orderRes.ok) {
+      const err = await orderRes.text();
+      console.error(`[Manual] Shopify fetch failed: ${err}`);
+      return res.status(500).json({ error: `Shopify fetch failed: ${err}` });
+    }
+
+    const { order } = await orderRes.json();
+    console.log(`[Manual] Fetched order #${order.order_number} with ${order.line_items.length} line items`);
+    
+    // Log all properties for debugging
+    for (const item of order.line_items) {
+      console.log(`[Manual] Line item: "${item.title}" | SKU: "${item.sku}" | Props: ${JSON.stringify(item.properties)}`);
+    }
+
+    // 2. Submit to Sinalite using the same shared function
+    const token = await getSinaliteToken();
+    await sendOrderToSinalite(order, token);
+
+    res.json({ 
+      success: true, 
+      message: `Order #${order.order_number} submitted to Sinalite. Check Render logs for result.` 
+    });
+
+  } catch (err) {
+    console.error('[Manual] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`🚀 Ultimate Shopify-Sinalite Sync Engine running on port ${PORT}`));
