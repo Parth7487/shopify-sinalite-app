@@ -289,8 +289,10 @@ async function sendOrderToSinalite(orderData, accessToken) {
       body: JSON.stringify(payload),
     });
 
-    const responseData = await response.json();
-    if (!response.ok) return console.error(`[Sinalite] Order failed:`, responseData);
+    const rawText = await response.text();
+    let responseData;
+    try { responseData = JSON.parse(rawText); } catch { responseData = rawText; }
+    if (!response.ok) return console.error(`[Sinalite] Order failed (${response.status}):`, responseData);
     
     console.log(`✅ Order #${orderData.order_number} submitted! Sinalite ID: ${responseData.orderId ?? 'N/A'}`);
   } catch (err) {
@@ -405,11 +407,14 @@ app.get('/api/rescue-pds1003', async (req, res) => {
       body: JSON.stringify(payload),
     });
 
-    const responseData = await response.json();
+    const rawText = await response.text();
+    let responseData;
+    try { responseData = JSON.parse(rawText); } catch { responseData = rawText; }
+
+    console.log(`[Rescue PDS-1003] Sinalite HTTP ${response.status} response:`, responseData);
 
     if (!response.ok) {
-      console.error('[Rescue PDS-1003] Sinalite rejected:', responseData);
-      return res.status(500).json({ error: 'Sinalite rejected order', details: responseData });
+      return res.status(500).json({ error: 'Sinalite rejected order', httpStatus: response.status, details: responseData });
     }
 
     console.log(`✅ [Rescue PDS-1003] SUCCESS! Sinalite Order ID: ${responseData.orderId ?? 'N/A'}`);
