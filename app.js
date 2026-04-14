@@ -13,6 +13,10 @@ app.use(cors()); // Critical: Allows your Shopify Storefront to request data fro
 const RETAIL_MARKUP_MULTIPLIER = 2.25; 
 const SINALITE_STORE_CODE = 9; // 9 = USA, 6 = Canada
 
+// ✅ PRODUCTION: Switched from staging (api.sinaliteuppy.com) → live (liveapi.sinalite.com)
+// To revert to staging: 'https://api.sinaliteuppy.com'
+const SINALITE_BASE_URL = 'https://liveapi.sinalite.com';
+
 // ─── Token Manager (Security) ───────────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiresAt = 0;
@@ -25,7 +29,7 @@ async function getSinaliteToken() {
 
   if (!clientId || !clientSecret) throw new Error('Missing Sinalite credentials');
 
-  const response = await fetch('https://api.sinaliteuppy.com/auth/token', {
+  const response = await fetch(`${SINALITE_BASE_URL}/auth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -55,7 +59,7 @@ app.get('/api/product/:id', async (req, res) => {
     const token = await getSinaliteToken();
     const productId = req.params.id;
 
-    const response = await fetch(`https://api.sinaliteuppy.com/product/${productId}/${SINALITE_STORE_CODE}`, {
+    const response = await fetch(`${SINALITE_BASE_URL}/product/${productId}/${SINALITE_STORE_CODE}`, {
         headers: { 'Authorization': `Bearer ${token}` }
     });
 
@@ -77,7 +81,7 @@ app.post('/api/price/:id', express.json(), async (req, res) => {
     const productId = req.params.id;
     const selectedOptions = req.body;  // Sent instantly when customer changes a dropdown on Shopify
 
-    const response = await fetch(`https://api.sinaliteuppy.com/price/${productId}/${SINALITE_STORE_CODE}`, {
+    const response = await fetch(`${SINALITE_BASE_URL}/price/${productId}/${SINALITE_STORE_CODE}`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${token}`,
@@ -112,7 +116,7 @@ app.post('/api/checkout/:id', express.json(), async (req, res) => {
     // The payload sent from Shopify Script contains the IDs and the visual Labels
     const selectedOptions = { productOptions: req.body.productOptions }; 
 
-    const priceResponse = await fetch(`https://api.sinaliteuppy.com/price/${productId}/${SINALITE_STORE_CODE}`, {
+    const priceResponse = await fetch(`${SINALITE_BASE_URL}/price/${productId}/${SINALITE_STORE_CODE}`, {
         method: 'POST',
         headers: { 
           'Authorization': `Bearer ${sinaliteToken}`,
@@ -273,7 +277,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
 
     // ── Fetch Sinalite product option list to map names → numeric IDs ─────────
     // Sinalite requires numeric option IDs, not human-readable labels.
-    const productRes = await fetch(`https://api.sinaliteuppy.com/product/${sinaliteProductId}/${SINALITE_STORE_CODE}`, {
+    const productRes = await fetch(`${SINALITE_BASE_URL}/product/${sinaliteProductId}/${SINALITE_STORE_CODE}`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
     const productRaw = await productRes.text();
@@ -322,7 +326,7 @@ async function sendOrderToSinalite(orderData, accessToken) {
 
     console.log(`[Sinalite] Submitting order #${orderData.order_number} — Product: ${sinaliteProductId}, File: ${fileUrl}`);
 
-    const response = await fetch('https://api.sinaliteuppy.com/order/new', {
+    const response = await fetch(`${SINALITE_BASE_URL}/order/new`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -455,7 +459,7 @@ app.get('/api/rescue-pds1003', async (req, res) => {
     console.log('[Rescue PDS-1003] Submitting to Sinalite...');
     console.log('[Rescue PDS-1003] Payload:', JSON.stringify(payload, null, 2));
 
-    const response = await fetch('https://api.sinaliteuppy.com/order/new', {
+    const response = await fetch(`${SINALITE_BASE_URL}/order/new`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
