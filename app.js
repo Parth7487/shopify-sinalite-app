@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors()); // Critical: Allows your Shopify Storefront to request data from this server
 
 // Your personal store profit multiplier (e.g. 2.5 means Sinalite's $10 becomes $25 on your site)
-const RETAIL_MARKUP_MULTIPLIER = 2.25; 
+const RETAIL_MARKUP_MULTIPLIER = 3.50; 
 const SINALITE_STORE_CODE = 9; // 9 = USA, 6 = Canada
 
 // ✅ PRODUCTION: Switched from staging (api.sinaliteuppy.com) → live (liveapi.sinalite.com)
@@ -50,6 +50,43 @@ async function getSinaliteToken() {
   
   return cachedToken;
 }
+
+// ─── Shopify Token Manager (New 2026 Flow) ──────────────────────────────────
+let cachedShopifyToken = null;
+let shopifyTokenExpiresAt = 0;
+
+async function getShopifyToken() {
+  if (cachedShopifyToken && Date.now() < shopifyTokenExpiresAt) return cachedShopifyToken;
+
+  const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
+  const clientId = process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+
+  if (!shopifyDomain || !clientId || !clientSecret) {
+    throw new Error('Missing Shopify Credentials in Environment Variables');
+  }
+
+  const response = await fetch(`https://${shopifyDomain}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'client_credentials',
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Shopify auth failed: ${await response.text()}`);
+
+  const data = await response.json();
+  cachedShopifyToken = data.access_token;
+  // Shopify tokens via client_credentials usually don't expire for custom apps, 
+  // but we'll recache daily to be safe.
+  shopifyTokenExpiresAt = Date.now() + 86400000; 
+  
+  return cachedShopifyToken;
+}
+
 
 // ─── NEW: "Dynamic Carpenter" Proxy Endpoints ─────────────────────────────────
 
@@ -131,28 +168,10 @@ app.post('/api/checkout/:id', express.json(), async (req, res) => {
     if (!apiPriceData || !apiPriceData.price) throw new Error('Could not calculate price.');
     const retailPrice = (parseFloat(apiPriceData.price) * RETAIL_MARKUP_MULTIPLIER).toFixed(2);
 
-    // 2. Authenticate with Shopify Dev Dashboard magically
+    // 2. Authenticate with Shopify magically (2026 OAuth Flow)
     const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
-    const shopifyClientId = process.env.SHOPIFY_CLIENT_ID;
-    const shopifyClientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+    const shopifyToken = await getShopifyToken();
 
-    if (!shopifyDomain || !shopifyClientId || !shopifyClientSecret) {
-       throw new Error('Missing Shopify Dev Dashboard Credentials in Render Environment Variables');
-    }
-
-    const shopAuthReq = await fetch(`https://${shopifyDomain}/admin/oauth/access_token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            client_id: shopifyClientId,
-            client_secret: shopifyClientSecret,
-            grant_type: "client_credentials"
-        })
-    });
-
-    if (!shopAuthReq.ok) throw new Error(`[Shopify Auth] Failed: ${await shopAuthReq.text()}`);
-    const shopAuthData = await shopAuthReq.json();
-    const shopifyToken = shopAuthData.access_token;
 
     // 3. Create Draft Order in Shopify natively!
     const draftOrderPayload = {
@@ -186,6 +205,55 @@ app.post('/api/checkout/:id', express.json(), async (req, res) => {
 
   } catch (err) {
     console.error('[Error] creating checkout:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Create a Custom Checkout from the whole CART!
+app.post('/api/teleport-cart', express.json(), async (req, res) => {
+  try {
+    const cartData = req.body; // Full cart JSON from Shopify
+    const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
+    const shopifyToken = await getShopifyToken();
+
+    if (!cartData || !cartData.items || cartData.items.length === 0) {
+      return res.status(400).json({ error: 'Cart is empty' });
+    }
+
+    // Clean up the line items for the Draft Order
+    const lineItems = cartData.items.map(item => {
+      // If it's a $0.01 pricing unit, we merge its value into a custom property
+      // or we can just ignore it if we are creating a single "Custom Print Order" line
+      return {
+        title: item.product_title,
+        price: (item.price / 100).toFixed(2), // Convert cents to dollars
+        quantity: item.quantity,
+        properties: item.properties || {}
+      };
+    });
+
+    const draftOrderPayload = {
+      draft_order: {
+        line_items: lineItems,
+        taxes_included: false,
+        note: "Auto-generated via Pixilab Teleporter"
+      }
+    };
+
+    const draftRes = await fetch(`https://${shopifyDomain}/admin/api/2024-01/draft_orders.json`, {
+      method: 'POST',
+      headers: {
+         'Content-Type': 'application/json',
+         'X-Shopify-Access-Token': shopifyToken
+      },
+      body: JSON.stringify(draftOrderPayload)
+    });
+
+    const draftData = await draftRes.json();
+    res.json({ checkoutUrl: draftData.draft_order.invoice_url });
+
+  } catch (err) {
+    console.error('[Error] teleport-cart failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -366,11 +434,10 @@ app.get('/api/manual-submit/:orderId', async (req, res) => {
   try {
     // 1. Fetch the order from Shopify Admin API
     const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
-    // SHOPIFY_ADMIN_TOKEN = the shpat_... token from Shopify Admin > Apps > Develop apps > API credentials
-    const shopifyToken = process.env.SHOPIFY_ADMIN_TOKEN;
-    if (!shopifyToken) return res.status(500).json({ error: 'Missing SHOPIFY_ADMIN_TOKEN env var — see INTEGRATION_MASTER_GUIDE.md' });
-
+    const shopifyToken = await getShopifyToken();
+    
     const orderRes = await fetch(`https://${shopifyDomain}/admin/api/2024-01/orders/${orderId}.json`, {
+
       headers: { 'X-Shopify-Access-Token': shopifyToken }
     });
 
@@ -403,94 +470,7 @@ app.get('/api/manual-submit/:orderId', async (req, res) => {
   }
 });
 
-// ─── ONE-TIME RESCUE: Order #PDS-1003 (Ayaan Lakhani) ────────────────────────
-// All data hardcoded from Shopify order screenshots — no admin token needed.
-// Call via: GET https://shopify-sinalite-app.onrender.com/api/rescue-pds1003?secret=pixilab2026
-app.get('/api/rescue-pds1003', async (req, res) => {
-  if (req.query.secret !== 'pixilab2026') return res.status(403).json({ error: 'Forbidden' });
-
-  try {
-    const token = await getSinaliteToken();
-
-    // ── Submit order with correct Sinalite numeric option IDs (discovered via GET /product/30/9) ──
-    const payload = {
-      referenceId: '7929734266942-R3',
-      shippingInfo: {
-        ShipFName: 'Ayaan',
-        ShipLName: 'Lakhani',
-        ShipAddr: '405 Darlene Trl',
-        ShipCity: 'Euless',
-        ShipState: 'TX',
-        ShipZip: '76039',
-        ShipCountry: 'US',
-        ShipPhone: '0000000000', // Required field — actual not available
-        ShipEmail: 'pixilabdesignstudio@gmail.com',
-        ShipMethod: 'UPS Ground',
-      },
-      billingInfo: {
-        BillFName: 'Ayaan',
-        BillLName: 'Lakhani',
-        BillAddr: '405 Darlene Trl',
-        BillCity: 'Euless',
-        BillState: 'TX',
-        BillZip: '76039',
-        BillCountry: 'US',
-        BillPhone: '0000000000',
-        BillEmail: 'pixilabdesignstudio@gmail.com',
-      },
-      items: [{
-        productId: 30, // integer — Business Cards 18pt Matte Lam + SPOT UV
-        options: {
-          // All values are numeric Sinalite option IDs (discovered from GET /product/30/9)
-          'size':       '4',   // 3.5 x 2
-          'qty':        '12',  // 500 pieces
-          'Stock':      '551', // 16PT Printed 2 Sides (4/4)
-          'Turnaround': '18',  // 4 - 5 Business Days
-          'Coating':    '679', // Soft Touch Lamination 2 Sided
-          'Spot UV':    '556', // Two sided
-        },
-        files: [{
-          type: 'front',
-          url: 'https://production-options-bucket.s3.us-east-2.amazonaws.com/po/pixilabb.myshopify.com-45104/1775518543916-421439935-pixilprintbc.pdf'
-        }],
-      }],
-    };
-
-    console.log('[Rescue PDS-1003] Submitting to Sinalite...');
-    console.log('[Rescue PDS-1003] Payload:', JSON.stringify(payload, null, 2));
-
-    const response = await fetch(`${SINALITE_BASE_URL}/order/new`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const rawText = await response.text();
-    let responseData;
-    try { responseData = JSON.parse(rawText); } catch { responseData = rawText; }
-
-    console.log(`[Rescue PDS-1003] Sinalite HTTP ${response.status} response:`, responseData);
-
-    if (!response.ok) {
-      return res.status(500).json({ error: 'Sinalite rejected order', httpStatus: response.status, details: responseData });
-    }
-
-    console.log(`✅ [Rescue PDS-1003] SUCCESS! Sinalite Order ID: ${responseData.orderId ?? 'N/A'}`);
-    res.json({
-      success: true,
-      message: 'Order #PDS-1003 successfully submitted to Sinalite!',
-      sinaliteOrderId: responseData.orderId,
-      fullResponse: responseData,
-    });
-
-  } catch (err) {
-    console.error('[Rescue PDS-1003] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+// ─── Start Server ─────────────────────────────────────────────────────────────
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`🚀 Ultimate Shopify-Sinalite Sync Engine running on port ${PORT}`));
