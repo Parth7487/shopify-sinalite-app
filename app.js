@@ -212,7 +212,7 @@ app.post('/api/checkout/:id', express.json(), async (req, res) => {
 // 4. Create a Custom Checkout from the whole CART!
 app.post('/api/teleport-cart', express.json(), async (req, res) => {
   try {
-    const cartData = req.body; // Full cart JSON from Shopify
+    const cartData = req.body; // Full cart JSON from Shopify (with captured note)
     const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
     const shopifyToken = await getShopifyToken();
 
@@ -220,23 +220,57 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'Cart is empty' });
     }
 
-    // Clean up the line items for the Draft Order
-    const lineItems = cartData.items.map(item => {
-      // If it's a $0.01 pricing unit, we merge its value into a custom property
-      // or we can just ignore it if we are creating a single "Custom Print Order" line
-      return {
-        title: item.product_title,
-        price: (item.price / 100).toFixed(2), // Convert cents to dollars
-        quantity: item.quantity,
-        properties: item.properties || {}
-      };
+    const groupedJobs = {};
+    const standaloneItems = [];
+
+    // ── Group items by _job_id ──────────────────────────────────────────────
+    cartData.items.forEach(item => {
+      const jobId = item.properties ? item.properties._job_id : null;
+      
+      if (jobId) {
+        if (!groupedJobs[jobId]) {
+          groupedJobs[jobId] = {
+            title: item.product_title,
+            total_price_cents: 0,
+            quantity: 1, // We treat the whole job as 1 unit
+            properties: []
+          };
+          
+          // Only keep properties for the main item (exclude technical ones if needed)
+          for (const [key, value] of Object.entries(item.properties)) {
+             groupedJobs[jobId].properties.push({ name: key, value: value });
+          }
+        }
+        
+        // Add this item's price to the job total
+        groupedJobs[jobId].total_price_cents += (item.price * item.quantity);
+      } else {
+        // Standard non-Sinalite item
+        standaloneItems.push({
+          title: item.title,
+          price: (item.price / 100).toFixed(2),
+          quantity: item.quantity,
+          properties: item.properties ? Object.entries(item.properties).map(([k,v]) => ({ name: k, value: v })) : []
+        });
+      }
     });
+
+    // ── Build final line items ──────────────────────────────────────────────
+    const finalLineItems = [
+      ...standaloneItems,
+      ...Object.values(groupedJobs).map(job => ({
+        title: job.title,
+        price: (job.total_price_cents / 100).toFixed(2),
+        quantity: job.quantity,
+        properties: job.properties
+      }))
+    ];
 
     const draftOrderPayload = {
       draft_order: {
-        line_items: lineItems,
+        line_items: finalLineItems,
         taxes_included: false,
-        note: "Auto-generated via Pixilab Teleporter"
+        note: cartData.note || "Auto-generated via Pixilab Teleporter"
       }
     };
 
@@ -248,6 +282,11 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
       },
       body: JSON.stringify(draftOrderPayload)
     });
+
+    if (!draftRes.ok) {
+       const errorText = await draftRes.text();
+       throw new Error(`[Shopify Draft Error] ${errorText}`);
+    }
 
     const draftData = await draftRes.json();
     res.json({ checkoutUrl: draftData.draft_order.invoice_url });
