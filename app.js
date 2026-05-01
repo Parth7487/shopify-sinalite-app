@@ -232,17 +232,26 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
           groupedJobs[jobId] = {
             title: item.product_title,
             total_price_cents: 0,
-            quantity: 1, // We treat the whole job as 1 unit
-            properties: []
+            quantity: 1, 
+            propertiesMap: {} // Use a map to merge properties across all items in the job
           };
-          
-          // Only keep properties for the main item (exclude technical ones if needed)
-          for (const [key, value] of Object.entries(item.properties)) {
-             groupedJobs[jobId].properties.push({ name: key, value: value });
-          }
         }
         
-        // Add this item's price to the job total
+        // Accumulate ALL properties from ALL items sharing this Job ID
+        for (const [key, value] of Object.entries(item.properties)) {
+           // We remove the leading underscore for the Draft Order so they are VISIBLE to the customer
+           // EXCEPT for the internal _job_id itself which we should keep for reference
+           let cleanKey = key;
+           if (key.startsWith('_') && key !== '_job_id') {
+              cleanKey = key.substring(1); 
+           }
+           
+           // Don't overwrite if already exists (unless the existing value is blank)
+           if (!groupedJobs[jobId].propertiesMap[cleanKey] || groupedJobs[jobId].propertiesMap[cleanKey] === "") {
+              groupedJobs[jobId].propertiesMap[cleanKey] = value;
+           }
+        }
+        
         groupedJobs[jobId].total_price_cents += (item.price * item.quantity);
       } else {
         // Standard non-Sinalite item
@@ -250,7 +259,10 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
           title: item.title,
           price: (item.price / 100).toFixed(2),
           quantity: item.quantity,
-          properties: item.properties ? Object.entries(item.properties).map(([k,v]) => ({ name: k, value: v })) : []
+          properties: item.properties ? Object.entries(item.properties).map(([k,v]) => ({ 
+             name: k.startsWith('_') ? k.substring(1) : k, 
+             value: v 
+          })) : []
         });
       }
     });
@@ -262,7 +274,7 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
         title: job.title,
         price: (job.total_price_cents / 100).toFixed(2),
         quantity: job.quantity,
-        properties: job.properties
+        properties: Object.entries(job.propertiesMap).map(([name, value]) => ({ name, value }))
       }))
     ];
 
