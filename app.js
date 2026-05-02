@@ -249,6 +249,8 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
            const remapping = {
               "po_text_area": "DESCRIPTION",
               "YES": "EMAIL PROOF",
+              "Design": "DESIGN SERVICES",
+              "Services": "DESIGN SERVICES",
               "Front": "FRONT ARTWORK",
               "Back": "BACK ARTWORK",
               "Specific instructions": "SPECIFIC INSTRUCTIONS"
