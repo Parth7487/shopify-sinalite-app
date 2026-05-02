@@ -239,16 +239,33 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
         
         // Accumulate ALL properties from ALL items sharing this Job ID
         for (const [key, value] of Object.entries(item.properties)) {
-           // We remove the leading underscore for the Draft Order so they are VISIBLE to the customer
-           // EXCEPT for the internal _job_id itself which we should keep for reference
+           // 🛠️ FINAL CLEANING: Remap technical names to friendly titles
            let cleanKey = key;
            if (key.startsWith('_') && key !== '_job_id') {
               cleanKey = key.substring(1); 
            }
+
+           // Common remapping for Optis tech-names
+           const remapping = {
+              "po_text_area": "Instructions",
+              "YES": "Service Confirmed",
+              "Front": "Front Artwork",
+              "Back": "Back Artwork",
+              "Specific instructions": "Specific Instructions"
+           };
+
+           for (const [tech, friendly] of Object.entries(remapping)) {
+              if (cleanKey.includes(tech)) cleanKey = friendly;
+           }
            
-           // Don't overwrite if already exists (unless the existing value is blank)
+           // Don't overwrite if already exists (unless current is technical and new is friendly)
            if (!groupedJobs[jobId].propertiesMap[cleanKey] || groupedJobs[jobId].propertiesMap[cleanKey] === "") {
               groupedJobs[jobId].propertiesMap[cleanKey] = value;
+           }
+
+           // If this is a "Specific Instruction", promote it to the master Order Note too
+           if (cleanKey === "Specific Instructions" || cleanKey === "Instructions") {
+              cartData.note = (cartData.note || "") + " | " + value;
            }
         }
         
