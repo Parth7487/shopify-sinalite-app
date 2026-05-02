@@ -245,20 +245,23 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
               cleanKey = key.substring(1); 
            }
 
-           // Common remapping for Optis tech-names
+           // 🛠️ STRICT REMAPPING: Convert Optis technical IDs to clean labels
            const remapping = {
-              "po_text_area": "Instructions",
-              "YES": "Service Confirmed",
-              "Front": "Front Artwork",
-              "Back": "Back Artwork",
-              "Specific instructions": "Specific Instructions"
+              "po_text_area": "DESCRIPTION",
+              "YES": "EMAIL PROOF",
+              "Front": "FRONT ARTWORK",
+              "Back": "BACK ARTWORK",
+              "Specific instructions": "SPECIFIC INSTRUCTIONS"
            };
 
            for (const [tech, friendly] of Object.entries(remapping)) {
-              if (cleanKey.includes(tech)) cleanKey = friendly;
+              // If the technical key contains our search term, replace the whole key
+              if (cleanKey === tech || (tech.length > 3 && cleanKey.includes(tech))) {
+                 cleanKey = friendly;
+              }
            }
            
-           // Don't overwrite if already exists (unless current is technical and new is friendly)
+           // Don't overwrite if already exists
            if (!groupedJobs[jobId].propertiesMap[cleanKey] || groupedJobs[jobId].propertiesMap[cleanKey] === "") {
               groupedJobs[jobId].propertiesMap[cleanKey] = value;
            }
