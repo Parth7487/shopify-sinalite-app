@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
 const cors = require('cors');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -146,42 +147,61 @@ app.post('/api/price/:id', express.json(), async (req, res) => {
 // 3. Create a Custom Checkout (Draft Order Teleport!)
 app.post('/api/checkout/:id', express.json(), async (req, res) => {
   try {
-    // 1. Get exact price from Sinalite
-    const sinaliteToken = await getSinaliteToken();
     const productId = req.params.id;
-    
-    // The payload sent from Shopify Script contains the IDs and the visual Labels
-    const selectedOptions = { productOptions: req.body.productOptions }; 
+    let retailPrice = req.body.price;
 
-    const priceResponse = await fetch(`${SINALITE_BASE_URL}/price/${productId}/${SINALITE_STORE_CODE}`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${sinaliteToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(selectedOptions)
-    });
+    // If price is not explicitly passed, calculate it from Sinalite API
+    if (!retailPrice && req.body.productOptions) {
+      const sinaliteToken = await getSinaliteToken();
+      const selectedOptions = { productOptions: req.body.productOptions }; 
 
-    if (!priceResponse.ok) throw new Error(`[Sinalite] Price fetch failed: ${priceResponse.status}`);
-    const apiPriceData = await priceResponse.json();
-    
-    if (!apiPriceData || !apiPriceData.price) throw new Error('Could not calculate price.');
-    const retailPrice = (parseFloat(apiPriceData.price) * RETAIL_MARKUP_MULTIPLIER).toFixed(2);
+      const priceResponse = await fetch(`${SINALITE_BASE_URL}/price/${productId}/${SINALITE_STORE_CODE}`, {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${sinaliteToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(selectedOptions)
+      });
 
-    // 2. Authenticate with Shopify magically (2026 OAuth Flow)
+      if (!priceResponse.ok) throw new Error(`[Sinalite] Price fetch failed: ${priceResponse.status}`);
+      const apiPriceData = await priceResponse.json();
+      
+      if (!apiPriceData || !apiPriceData.price) throw new Error('Could not calculate price.');
+      retailPrice = (parseFloat(apiPriceData.price) * RETAIL_MARKUP_MULTIPLIER).toFixed(2);
+    }
+
+    if (!retailPrice) {
+      throw new Error('Price or productOptions must be provided');
+    }
+
+    // 2. Authenticate with Shopify
     const shopifyDomain = process.env.SHOPIFY_STORE_DOMAIN;
     const shopifyToken = await getShopifyToken();
 
+    // Format properties: accept either array of {name, value} or flat key-value object
+    let formattedProperties = [];
+    if (Array.isArray(req.body.properties)) {
+      formattedProperties = req.body.properties;
+    } else if (req.body.properties && typeof req.body.properties === 'object') {
+      formattedProperties = Object.entries(req.body.properties).map(([name, value]) => ({
+        name,
+        value: String(value)
+      }));
+    } else if (req.body.optionNames) {
+      formattedProperties = req.body.optionNames;
+    }
 
     // 3. Create Draft Order in Shopify natively!
     const draftOrderPayload = {
       draft_order: {
         line_items: [
           {
-            title: `Custom Print Job (ID: ${productId})`,
-            price: retailPrice,
+            variant_id: req.body.variant_id ? Number(req.body.variant_id) : null,
+            title: `Custom Business Cards (Product ID: ${productId})`,
+            price: String(retailPrice),
             quantity: 1,
-            properties: req.body.optionNames || [] // Appends the visual size/coating choices to the cart!
+            properties: formattedProperties
           }
         ],
         taxes_included: false
@@ -258,7 +278,7 @@ app.post('/api/teleport-cart', express.json(), async (req, res) => {
 
            for (const [tech, friendly] of Object.entries(remapping)) {
               // If the technical key contains our search term, replace the whole key
-              if (cleanKey === tech || (tech.length > 3 && cleanKey.includes(tech))) {
+              if (cleanKey.toLowerCase().includes(tech.toLowerCase())) {
                  cleanKey = friendly;
               }
            }
@@ -543,7 +563,57 @@ app.get('/api/manual-submit/:orderId', async (req, res) => {
   }
 });
 
-// ─── Start Server ─────────────────────────────────────────────────────────────
+// 5. Scraped pricing data endpoint for 14pt Gloss products
+app.post('/api/scraped-price', express.json(), (req, res) => {
+  try {
+    const { size, orientation, color, quantity, roundedCorners, coating, productionTime } = req.body;
+    
+    // Read the local JSON file
+    const filePath = "/home/parth/Documents/Projects/Pixilab/.planning/scraped_data/new/14_pt_gloss_variants_2026_08_18.json";
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Pricing file not found" });
+    }
+    
+    const rawData = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const results = rawData.results || [];
+    
+    // Normalizations for matching
+    const normColor = color === "single-sided" ? "Full Color Front, No Back" :
+                      color === "grayscale-back" ? "Full Color Front, Grayscale Back" :
+                      color === "double-sided" ? "Full Color Both Sides" : color;
+                      
+    const normCoating = coating === "UV Front" ? "High Gloss UV Coating Front" :
+                        coating === "UV Both Sides" ? "High Gloss UV Coating Both Sides" :
+                        coating === "None" ? "None" : coating;
+                        
+    const matchedItem = results.find(item => 
+      item.size === size &&
+      item.orientation === orientation &&
+      item.color === normColor &&
+      item.quantity === String(quantity) &&
+      (item.roundedCorners.includes(roundedCorners) || (roundedCorners === "None" && item.roundedCorners === "None")) &&
+      item.coating === normCoating &&
+      item.productionTime.toLowerCase().includes(productionTime.toLowerCase())
+    );
+    
+    if (!matchedItem) {
+      return res.status(404).json({ error: "Price combination not found" });
+    }
+    
+    const cleanPrice = matchedItem.price.replace('$', '').trim();
+    const wholesalePrice = parseFloat(cleanPrice) || 0;
+    const retailPrice = (wholesalePrice * RETAIL_MARKUP_MULTIPLIER).toFixed(2);
+    
+    res.json({
+      price: matchedItem.price,
+      wholesalePrice: wholesalePrice,
+      retailPrice: retailPrice
+    });
+  } catch (err) {
+    console.error('[Error] scraped pricing calculation:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`🚀 Ultimate Shopify-Sinalite Sync Engine running on port ${PORT}`));
